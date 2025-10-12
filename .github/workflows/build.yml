@@ -45,10 +45,19 @@ jobs:
         run: chmod +x gradlew
 
       - name: Configure Git User Details
-        run: git config --global user.email "ci@luminolmc.com" && git config --global user.name "LuminolMC CI"
+        run: git config --global user.email "2504595803@qq.com" && git config --global user.name "addre"
 
       - name: Apply All Patches
         run: ./gradlew --refresh-dependencies applyAllPatches
+
+      - name: Hard Replace ShearsItem.java
+        run: |
+          TARGET_DIR="lophine-server/src/minecraft/java/net/minecraft/world/item"
+          TARGET_FILE="$TARGET_DIR/ShearsItem.java"
+          SOURCE_FILE="tempfiles/ShearsItem.java"
+          mkdir -p $TARGET_DIR
+          cp $SOURCE_FILE $TARGET_DIR
+          echo "Successfully replaced $TARGET_FILE with $SOURCE_FILE."
 
       - name: Build Paperclip Jar
         run: ./gradlew --refresh-dependencies createMojmapPaperclipJar
