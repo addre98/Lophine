@@ -25,6 +25,7 @@ import com.mojang.logging.LogUtils;
 import fun.bm.lophine.config.modules.function.FakeplayerConfig;
 import io.papermc.paper.adventure.PaperAdventure;
 import io.papermc.paper.threadedregions.RegionizedServer;
+import io.papermc.paper.threadedregions.scheduler.FoliaGlobalRegionScheduler;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.Style;
 import net.minecraft.nbt.CompoundTag;
@@ -213,6 +214,18 @@ public class BotList {
         return bot;
     }
 
+    /*
+     * return true if async
+     */
+    public boolean removeBot(@NotNull ServerBot bot, @NotNull BotRemoveEvent.RemoveReason reason, @Nullable CommandSender remover, boolean saved, boolean async) {
+        if (async && !TickThread.isTickThreadFor(bot.level(), bot.getX(), bot.getZ())) {
+            bot.getBukkitEntity().taskScheduler.schedule((Entity unused) -> this.removeBot(bot, reason, remover, saved), null, 1L);
+            return true;
+        }
+        this.removeBot(bot, reason, remover, saved);
+        return false;
+    }
+
     public boolean removeBot(@NotNull ServerBot bot, @NotNull BotRemoveEvent.RemoveReason reason, @Nullable CommandSender remover, boolean saved) {
         return this.removeBot(bot, reason, remover, saved, this.dataStorage);
     }
@@ -226,7 +239,7 @@ public class BotList {
         }
 
         if (bot.removeTaskId != -1) {
-            Bukkit.getScheduler().cancelTask(bot.removeTaskId);
+            ((FoliaGlobalRegionScheduler) Bukkit.getGlobalRegionScheduler()).cancelTask(bot.removeTaskId);
             bot.removeTaskId = -1;
         }
 
@@ -304,12 +317,12 @@ public class BotList {
         AtomicInteger received = new AtomicInteger();
         for (ServerBot bot : this.bots) {
             bot.resume = FakeplayerConfig.canResident;
-            if (TickThread.isTickThreadFor(bot)) {
+            if (TickThread.isTickThreadFor(bot.level(), bot.getX(), bot.getZ())) {
                 this.removeBot(bot, BotRemoveEvent.RemoveReason.INTERNAL, null, FakeplayerConfig.canResident);
             } else {
                 finished = false;
                 check.getAndIncrement();
-                removeBot(bot, check, received, new AtomicInteger());
+                this.removeBot(bot, check, received, new AtomicInteger());
             }
         }
         return finished;
@@ -321,13 +334,17 @@ public class BotList {
                 BotList.LOGGER.info("Try to remove bot {} located in [{}]{},{},{} too many times!", bot.getName().getString(), bot.level().serverLevelData.getLevelName(), bot.getX(), bot.getY(), bot.getZ());
             }
             counter.getAndIncrement();
-            this.removeBot(bot, BotRemoveEvent.RemoveReason.INTERNAL, null, FakeplayerConfig.canResident);
-            received.getAndIncrement();
+            try {
+                this.removeBot(bot, BotRemoveEvent.RemoveReason.INTERNAL, null, FakeplayerConfig.canResident);
+                received.getAndIncrement();
+            } catch (Exception e) {
+                this.removeBot(bot, check, received, counter);
+            }
             if (received.get() >= check.get()) {
                 this.forceShutdown = true;
                 MinecraftServer.getServer().stopServer();
             }
-        }, (Entity unused) -> removeBot(bot, check, received, counter), 1L);
+        }, null, 1L);
     }
 
     public void loadBotInfo() {

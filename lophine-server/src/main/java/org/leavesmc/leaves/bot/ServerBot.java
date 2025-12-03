@@ -154,7 +154,7 @@ public class ServerBot extends ServerPlayer {
             this.notSleepTicks++;
         }
 
-        if (FakeplayerConfig.regenAmount > 0.0 && getServer().checkTickCount(20)) {
+        if (FakeplayerConfig.regenAmount > 0.0 && this.tickCount % 20 == 0) {
             float regenAmount = (float) (FakeplayerConfig.regenAmount * 20);
             this.setHealth(Math.min(this.getHealth() + regenAmount, this.getMaxHealth()));
         }
@@ -464,16 +464,16 @@ public class ServerBot extends ServerPlayer {
     }
 
     public void sendFakeData(ServerPlayerConnection playerConnection, boolean login) {
-        ChunkMap.TrackedEntity entityTracker = this.level().getChunkSource().chunkMap.entityMap.get(this.getId());
+        ChunkMap.TrackedEntity entityTracker = this.moonrise$getTrackedEntity();
 
         if (entityTracker == null) {
-            LOGGER.warn("Fakeplayer cant get entity tracker for " + this.getId());
+            LOGGER.warn("Fakeplayer cant get entity tracker for {}", this.getId());
             return;
         }
 
         playerConnection.send(this.getAddEntityPacket(entityTracker.serverEntity));
         if (login) {
-            Bukkit.getScheduler().runTaskLater(MinecraftInternalPlugin.INSTANCE, () -> playerConnection.send(new ClientboundRotateHeadPacket(this, (byte) ((getYRot() * 256f) / 360f))), 10);
+            Bukkit.getGlobalRegionScheduler().runDelayed(MinecraftInternalPlugin.INSTANCE, (unused) -> playerConnection.send(new ClientboundRotateHeadPacket(this, (byte) ((getYRot() * 256f) / 360f))), 10);
         } else {
             playerConnection.send(new ClientboundRotateHeadPacket(this, (byte) ((getYRot() * 256f) / 360f)));
         }
@@ -499,7 +499,7 @@ public class ServerBot extends ServerPlayer {
         Component defaultMessage = this.getCombatTracker().getDeathMessage();
 
         BotDeathEvent event = new BotDeathEvent(this.getBukkitEntity(), PaperAdventure.asAdventure(defaultMessage), flag);
-        this.getServer().server.getPluginManager().callEvent(event);
+        MinecraftServer.getServer().server.getPluginManager().callEvent(event);
 
         if (event.isCancelled()) {
             if (this.getHealth() <= 0) {

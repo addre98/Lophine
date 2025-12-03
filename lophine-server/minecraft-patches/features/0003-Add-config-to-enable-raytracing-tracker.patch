@@ -1,0 +1,158 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MrHua269 <wangxyper@163.com>
+Date: Wed, 5 Feb 2025 15:22:19 +0800
+Subject: [PATCH] Add config to enable raytracing tracker
+
+
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index 6868b915bf3deb85783a638d4441a15fea6da2dc..70740381c6501c1a518c52b24381edd16792507f 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -1278,7 +1278,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+                 double d1 = vec3_dx * vec3_dx + vec3_dz * vec3_dz; // Paper
+                 double d2 = d * d;
+                 // Paper start - Configurable entity tracking range by Y
+-                boolean flag = d1 <= d2;
++                boolean flag = d1 <= d2 && !entity.isCulled(); // Luminol - Ray tracing entity tracker
+                 if (flag && level.paperConfig().entities.trackingRangeY.enabled) {
+                     double rangeY = level.paperConfig().entities.trackingRangeY.get(this.entity, -1);
+                     if (rangeY != -1) {
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index 38092dcc3dedc6c855e5598126be47f892223547..a8b6e89035579557b59a20ddbe9b32943e6b7164 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -147,7 +147,7 @@ import net.minecraft.world.waypoints.WaypointTransmitter;
+ import org.jetbrains.annotations.Contract;
+ import org.slf4j.Logger;
+ 
+-public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess, ScoreHolder, DataComponentGetter, ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity, ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity { // Paper - rewrite chunk system // Paper - optimise entity tracker
++public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess, ScoreHolder, DataComponentGetter, ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity, ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity, dev.tr7zw.entityculling.versionless.access.Cullable { // Paper - rewrite chunk system // Paper - optimise entity tracker // Luminol - Ray tracing entity tracker
+     // CraftBukkit start
+     private static final int CURRENT_LEVEL = 2;
+     public boolean preserveMotion = true; // Paper - Fix Entity Teleportation and cancel velocity if teleported; keep initial motion on first snapTo
+@@ -6463,4 +6463,46 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+     // Paper end - Expose entity id counter
+ 
+     public boolean shouldTickHot() { return this.tickCount > 20 * 10 && this.isAlive(); } // KioCG
++
++    private long lasttime = 0;
++    private boolean culled = false;
++    private boolean outOfCamera = false;
++
++    @Override
++    public void setTimeout() {
++        this.lasttime = System.currentTimeMillis() + 1000;
++    }
++
++    @Override
++    public boolean isForcedVisible() {
++        return this.lasttime > System.currentTimeMillis();
++    }
++
++    @Override
++    public void setCulled(boolean value) {
++        this.culled = value;
++        if (!value) {
++            setTimeout();
++        }
++    }
++
++    @Override
++    public boolean isCulled() {
++        if (!fun.bm.lophine.config.modules.experiment.RayTrackingEntityTrackerConfig.enabled)
++            return false;
++        return this.culled;
++    }
++
++    @Override
++    public void setOutOfCamera(boolean value) {
++        this.outOfCamera = value;
++    }
++
++    @Override
++    public boolean isOutOfCamera() {
++        if (!fun.bm.lophine.config.modules.experiment.RayTrackingEntityTrackerConfig.enabled)
++            return false;
++        return this.outOfCamera;
++    }
++
+ }
+diff --git a/net/minecraft/world/entity/EntityType.java b/net/minecraft/world/entity/EntityType.java
+index 6f00ffa05d9597917574357e0069c9b056aa5ce2..5cc7a91e32f17d8d9585ae4844a4ed3b706e3273 100644
+--- a/net/minecraft/world/entity/EntityType.java
++++ b/net/minecraft/world/entity/EntityType.java
+@@ -1119,6 +1119,9 @@ public class EntityType<T extends Entity> implements FeatureElement, EntityTypeT
+     public final int passengerTickTimerId;
+     public final int passengerInactiveTickTimerId;
+     // Folia end - profiler
++    // Luminol - Raytracing entity tracker
++    public boolean skipRaytracningCheck = false;
++    // Luminol end
+ 
+     public EntityType(
+         EntityType.EntityFactory<T> factory,
+diff --git a/net/minecraft/world/entity/player/Player.java b/net/minecraft/world/entity/player/Player.java
+index 2842314c712449625e9275aff7707c916c3ea767..09b549fa9568aa1ae13b1b975db14a6268fdaa46 100644
+--- a/net/minecraft/world/entity/player/Player.java
++++ b/net/minecraft/world/entity/player/Player.java
+@@ -229,6 +229,25 @@ public abstract class Player extends LivingEntity {
+         return (org.bukkit.craftbukkit.entity.CraftHumanEntity) super.getBukkitEntity();
+     }
+     // CraftBukkit end
++    // Luminol start - Raytracing entity tracker
++    public dev.tr7zw.entityculling.CullTask cullTask;
++    {
++        if (!fun.bm.lophine.config.modules.experiment.RayTrackingEntityTrackerConfig.enabled) {
++            this.cullTask = null;
++        }else {
++            final com.logisticscraft.occlusionculling.OcclusionCullingInstance culling = new com.logisticscraft.occlusionculling.OcclusionCullingInstance(
++                    fun.bm.lophine.config.modules.experiment.RayTrackingEntityTrackerConfig.tracingDistance,
++                    new dev.tr7zw.entityculling.DefaultChunkDataProvider(this.level())
++            );
++
++            this.cullTask = new dev.tr7zw.entityculling.CullTask(
++                    culling, this,
++                    fun.bm.lophine.config.modules.experiment.RayTrackingEntityTrackerConfig.hitboxLimit,
++                    fun.bm.lophine.config.modules.experiment.RayTrackingEntityTrackerConfig.checkIntervalMs
++            );
++        }
++    }
++    // Luminol end
+ 
+     public Player(Level level, GameProfile gameProfile) {
+         super(EntityType.PLAYER, level);
+@@ -287,6 +306,26 @@ public abstract class Player extends LivingEntity {
+ 
+     @Override
+     public void tick() {
++        // Luminol start - Ray tracing entity tracker
++        if (!fun.bm.lophine.config.modules.experiment.RayTrackingEntityTrackerConfig.enabled) {
++            if (this.cullTask != null) this.cullTask.signalStop();
++            this.cullTask = null;
++        }else {
++            final com.logisticscraft.occlusionculling.OcclusionCullingInstance culling = new com.logisticscraft.occlusionculling.OcclusionCullingInstance(
++                    fun.bm.lophine.config.modules.experiment.RayTrackingEntityTrackerConfig.tracingDistance,
++                    new dev.tr7zw.entityculling.DefaultChunkDataProvider(this.level())
++            );
++
++            this.cullTask = new dev.tr7zw.entityculling.CullTask(
++                    culling, this,
++                    fun.bm.lophine.config.modules.experiment.RayTrackingEntityTrackerConfig.hitboxLimit,
++                    fun.bm.lophine.config.modules.experiment.RayTrackingEntityTrackerConfig.checkIntervalMs
++            );
++        }
++        if (this.cullTask != null) this.cullTask.setup();
++        if (this.cullTask != null) this.cullTask.requestCullSignal(); // Luminol - Ray tracing entity tracker
++        // Luminol end
++
+         this.noPhysics = this.isSpectator();
+         if (this.isSpectator() || this.isPassenger()) {
+             this.setOnGround(false);
+@@ -1426,6 +1465,7 @@ public abstract class Player extends LivingEntity {
+         if (this.containerMenu != null && this.hasContainerOpen()) {
+             this.doCloseContainer();
+         }
++        if (this.cullTask != null) this.cullTask.signalStop(); // Luminol - Ray tracing entity tracker
+     }
+ 
+     @Override

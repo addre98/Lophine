@@ -20,7 +20,7 @@ package org.leavesmc.leaves.protocol.servux;
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.Table;
 import com.mojang.serialization.DataResult;
-import fun.bm.lophine.config.modules.function.ServuxProtocolConfig;
+import fun.bm.lophine.config.modules.function.protocol.ServuxProtocolConfig;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -56,11 +56,12 @@ public class ServuxHudDataProtocol implements LeavesProtocol {
     private static final List<ServerPlayer> players = Collections.synchronizedList(new ArrayList<>());
     private static final int updateInterval = 80;
 
-    private static final ConcurrentHashMap<ServerPlayer, List<DataLogger.Type>> loggerPlayers = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<DataLogger.Type, DataLogger<?>> LOGGERS = new ConcurrentHashMap<>();
+    private static final Map<ServerPlayer, List<DataLogger.Type>> loggerPlayers = new ConcurrentHashMap<>();
+    private static final Map<DataLogger.Type, DataLogger<?>> LOGGERS = new ConcurrentHashMap<>();
     private static final Table<DataLogger.Type, ServerPlayer, Tag> DATA = HashBasedTable.create();
 
     public static boolean refreshSpawnMetadata = false;
+    private long lastAcceptTime = 0;
 
     @ProtocolHandler.Init
     private static void initializeLoggers() {
@@ -238,28 +239,26 @@ public class ServuxHudDataProtocol implements LeavesProtocol {
             return;
         }
 
-        MinecraftServer server = MinecraftServer.getServer();
+        long currentTime = System.currentTimeMillis() / 50;
+        if (currentTime == lastAcceptTime) return;
+        lastAcceptTime = currentTime;
 
-        if (server.checkTickCount(ServuxProtocolConfig.hudUpdateInterval)) {
+        if (currentTime % ServuxProtocolConfig.hudUpdateInterval == 0) {
+            MinecraftServer server = MinecraftServer.getServer();
             LOGGERS.forEach((type, logger) -> {
                 if (!isLoggerTypeEnabled(type)) {
                     return;
                 }
-                for (ServerPlayer player : players) {
+                players.forEach(player -> {
                     Tag ret = logger.getResult(server, this, player);
                     if (ret != null) {
                         DATA.put(type, player, ret);
                     }
-                }
+                });
             });
         }
 
-        for (ServerPlayer player : loggerPlayers.keySet()) {
-            List<DataLogger.Type> list = loggerPlayers.get(player);
-            if (list.isEmpty()) {
-                return;
-            }
-
+        loggerPlayers.forEach((player, list) -> {
             CompoundTag nbt = new CompoundTag();
             for (DataLogger.Type type : list) {
                 Tag data = DATA.get(type, player);
@@ -268,8 +267,10 @@ public class ServuxHudDataProtocol implements LeavesProtocol {
                     DATA.remove(type, player);
                 }
             }
-            sendPacket(player, new HudDataPayload(HudDataPayloadType.PACKET_S2C_DATA_LOGGER_TICK, nbt));
-        }
+            if (!nbt.isEmpty()) {
+                sendPacket(player, new HudDataPayload(HudDataPayloadType.PACKET_S2C_DATA_LOGGER_TICK, nbt));
+            }
+        });
     }
 
     public void applyData(DataLogger.Type type, ServerPlayer player, Tag tag) {
